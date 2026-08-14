@@ -32,11 +32,18 @@ That ordering is the entire guarantee.
 
 | File | What it is |
 |---|---|
-| `manifest.json` | Today's chain head, row count, and epoch boundaries |
-| `manifest.json.ots` | OpenTimestamps proof for the manifest |
+| `manifest.json` | The **latest** chain head — a convenience pointer, rewritten daily |
+| `heads/manifest-<date>.json` | That day's head. Written once, never modified |
+| `heads/manifest-<date>.json.ots` | OpenTimestamps proof for that day's head |
 | `rekor.json` | Sigstore Rekor log entry (only if enabled) |
 | `verify.py` | The verifier — dependency-free, stdlib only |
 | `VERIFY.md` | This file |
+
+Each day gets its **own** head file and its own proof, and they are never
+rewritten. A single rolling `manifest.json.ots` would be worse than useless: it
+could only ever cover the most recent bytes, so yesterday's proof would be
+destroyed by today's run, and a proof still waiting on its Bitcoin attestation
+could never be completed.
 
 `verify.py` was committed **before the first chain head**. Check its git
 history: a head only commits us to a set of rows if the hashing algorithm was
@@ -85,10 +92,11 @@ verified **and** matched. Anything else prints what failed and where.
 To check a head against a specific date rather than today's:
 
 ```bash
-git log --oneline manifest.json          # find the day
-git show <commit>:manifest.json > m.json
-python3 verify.py ledger-2026-08-13.csv m.json
+python3 verify.py ledger-2026-08-13.csv heads/manifest-2026-08-13.json
 ```
+
+Every day's head stays in the tree, so no git archaeology is needed. (`git log`
+on that file still shows when it was first committed, which is the claim.)
 
 ## Checking the timestamp
 
@@ -97,8 +105,11 @@ The OpenTimestamps proof is the part that does not rely on trusting us:
 
 ```bash
 pip install opentimestamps-client
-ots verify manifest.json.ots            # needs manifest.json alongside it
+ots verify heads/manifest-2026-08-14.json.ots
 ```
+
+Verify the **dated** pair, not `manifest.json` — that file is rewritten daily,
+so it stops matching any older proof by design.
 
 It reports the Bitcoin block whose timestamp bounds when that exact manifest
 existed. A proof for a recent day may still be *pending* — attestations take a

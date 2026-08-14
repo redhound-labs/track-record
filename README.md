@@ -3,11 +3,11 @@
 A daily, publicly timestamped commitment to the trading signals Redhound has
 graded — published so the record can be checked rather than believed.
 
-**Status: genesis.** This commit publishes the verifier and nothing else. That
-ordering is deliberate: a chain head only commits us to a set of rows if the
-hashing algorithm was pinned *before* the head existed. Otherwise a convenient
-algorithm could be chosen later. The first `manifest.json` lands when the daily
-publisher is enabled; every commit after that is one day's chain head.
+**Status: publishing.** The genesis commit published the verifier and nothing
+else. That ordering is deliberate: a chain head only commits us to a set of rows
+if the hashing algorithm was pinned *before* the head existed. Otherwise a
+convenient algorithm could be chosen later. Every commit since is one day's
+chain head.
 
 ## What gets published here
 
@@ -26,8 +26,13 @@ outcomes were known.
 |---|---|
 | `verify.py` | The verifier. Standard library only — nothing to install. |
 | `VERIFY.md` | How to check a disclosed ledger, and what this does not prove. |
-| `manifest.json` | The current chain head, row count, and epoch boundaries. |
-| `manifest.json.ots` | OpenTimestamps proof for the manifest. |
+| `heads/manifest-<date>.json` | That day's chain head, row count, and epoch boundaries. Written once, never modified. |
+| `heads/manifest-<date>.json.ots` | OpenTimestamps proof for that day's head. |
+| `manifest.json` | A copy of the most recent head, for convenience. Rewritten daily. |
+
+Each day gets its own head file and its own proof. Verify the **dated** pair —
+`manifest.json` is rewritten daily, so it stops matching any older proof by
+design.
 
 ## Start here
 
