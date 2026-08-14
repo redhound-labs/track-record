@@ -1,0 +1,31 @@
+{
+  "chain_head": null,
+  "chain_ok": true,
+  "columns": [
+    "sequence",
+    "signal_id",
+    "symbol",
+    "action",
+    "rules_hash",
+    "horizon",
+    "entry_date",
+    "exit_date",
+    "entry_price",
+    "exit_price",
+    "adjusted",
+    "gross_return",
+    "spy_return",
+    "sector_return",
+    "sector_etf",
+    "dollar_volume",
+    "dollar_volume_median_20d",
+    "reason",
+    "graded_at",
+    "prev_hash",
+    "entry_hash"
+  ],
+  "epochs": [],
+  "first_bad_sequence": null,
+  "row_count": 0,
+  "snapshot_date": "2026-08-14"
+}
