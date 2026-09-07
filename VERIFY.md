@@ -58,14 +58,47 @@ pinned at the same time. Otherwise a convenient algorithm could be chosen later.
   "chain_head": "…64 hex chars…",
   "chain_ok": true,
   "first_bad_sequence": null,
+  "rebaseline_sequence": null,
+  "rebaseline_reason": null,
+  "legacy_chain_ok": true,
+  "legacy_first_bad_sequence": null,
   "columns": ["sequence", "signal_id", "…"],
   "epochs": [{"rules_hash": "…", "row_count": 214}]
 }
 ```
 
-- **`chain_ok`** — whether the ledger verified from genesis when the snapshot was
-  taken. If this is ever `false`, it is published as `false`. A snapshot that
-  hid a verification failure would defeat the point of having a chain.
+- **`chain_ok`** — whether the ledger verified when the snapshot was taken. If
+  this is ever `false`, it is published as `false`. A snapshot that hid a
+  verification failure would defeat the point of having a chain.
+  ⚠️ Read it together with `rebaseline_sequence` below: when that is set,
+  `chain_ok` is a claim about the rows from that sequence onward, **not** about
+  the whole history.
+- **`rebaseline_sequence`** — normally `null`. When it is set, we are saying:
+  verification of the live record starts **here**, anchored on that row's stored
+  `prev_hash`, and we no longer claim everything before it verifies from genesis.
+  A re-baseline is a **weakening of the guarantee** over the earlier rows, and
+  you should read it as one — inside that range, an altered row would no longer
+  fail the headline check.
+
+  What limits that is publication, not cryptography. The boundary and its reason
+  are committed and timestamped here daily, so a boundary that moves — or one
+  that appears the same week an unfavourable row was written — is visible in
+  this repository's git history. **That history is the check. Read it.**
+
+  `verify.py` refuses a boundary that is unexplained, that names a row the file
+  does not contain, or that sits at or before the first row (which would
+  re-derive the whole history onto itself and prove nothing). It also replays
+  the discarded prefix from genesis anyway and prints that result next to the
+  headline one, so a re-baseline narrows what is claimed without letting the
+  older rows go unchecked.
+- **`rebaseline_reason`** — required whenever `rebaseline_sequence` is set. A
+  boundary with no stated reason cannot be told apart from one placed to skip an
+  inconvenient row, so the verifier rejects the pair.
+- **`legacy_chain_ok` / `legacy_first_bad_sequence`** — the unqualified
+  from-genesis result, published alongside the headline one **every day**,
+  re-baseline or not. This is what we no longer claim; it is here so that what
+  was dropped stays as visible as what was kept. With no re-baseline in force
+  these simply mirror `chain_ok` / `first_bad_sequence`.
 - **`epochs`** — the record is scoped to one *rule surface*. Changing the rules
   (thresholds, the analyst set, how confidence is computed) starts a new epoch
   with a new `rules_hash`, and the statistics restart. Publishing the epoch

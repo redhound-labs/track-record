@@ -31,6 +31,27 @@ The chain constrains the rows that exist. It says nothing about rows that were
 never written. Declining to grade an unfavourable signal is outside the
 guarantee, and no hash chain can close that gap.
 
+RE-BASELINING — READ THIS BEFORE TRUSTING `chain_ok`
+----------------------------------------------------
+A manifest may carry `rebaseline_sequence`. When it does, the publisher is
+saying: verification of the live record starts HERE, anchored on this row's
+stored `prev_hash`, and I no longer claim that everything before it verifies
+from genesis. This script honours that split and then does the thing that
+keeps it honest — it replays the discarded prefix from genesis anyway and
+prints the result next to the headline one. A re-baseline can narrow the
+claim; it cannot make the old rows go unchecked.
+
+Understand what it costs. Inside the re-baselined prefix, an altered row no
+longer fails the headline check. Cryptography does not constrain that; only
+publication does. The boundary and its stated reason are committed and
+timestamped daily alongside the head, so a boundary that moves — or one that
+appears the same week an unfavourable row was written — is visible in the
+public repository's git history. That history is the check. Read it.
+
+A boundary at or before the first row in the file is rejected outright: it
+would re-derive the entire history onto itself and prove nothing. So is one
+that names a row the file does not contain, and one with no stated reason.
+
 Two things narrow it. `epochs` in the manifest publishes every distinct
 `rules_hash` with its row count, so a change to the rule surface — which
 restarts the track record — is visible on the day it happens rather than
@@ -262,53 +283,52 @@ def read_rows(csv_path: Path) -> list[tuple[dict[str, Any], str, str]]:
 # ---------------------------------------------------------------------------
 
 
-def verify_csv(csv_path: Path) -> dict[str, Any]:
-    """Replay the chain forward from genesis. Returns the outcome as a dict.
+def _replay(
+    rows: list[tuple[dict[str, Any], str, str]],
+    *,
+    anchor: str,
+    label: str,
+) -> dict[str, Any]:
+    """Replay one contiguous run of rows against a starting hash.
+
+    `anchor` is GENESIS_HASH for a full walk, or — for a re-baselined segment —
+    the first row's own stored `prev_hash`, accepted as given rather than
+    re-derived. That acceptance is the entire cost of a re-baseline, and it is
+    why `verify_csv` never runs a segment walk without also running the full
+    one and reporting both.
 
     Stops at the first failure and reports its `sequence`: everything after a
     break is unverifiable anyway, so a list of downstream failures would only
     obscure where the history was actually altered.
     """
-    rows = read_rows(csv_path)
-
-    expected_prev = GENESIS_HASH
-    expected_sequence = 1
+    expected_prev = anchor
+    expected_sequence = rows[0][0]["sequence"] if rows else 1
     first_bad: int | None = None
     problems: list[str] = []
-    epochs: list[dict[str, Any]] = []
-    epoch_index: dict[str, int] = {}
 
     for payload, prev_hash, entry_hash in rows:
-        sequence = payload["sequence"]
-
-        rules_hash = payload["rules_hash"]
-        if rules_hash in epoch_index:
-            epochs[epoch_index[rules_hash]]["row_count"] += 1
-        else:
-            epoch_index[rules_hash] = len(epochs)
-            epochs.append({"rules_hash": rules_hash, "row_count": 1})
-
         if first_bad is not None:
-            continue
+            break
+        sequence = payload["sequence"]
 
         if sequence != expected_sequence:
             problems.append(
-                f"sequence gap: expected {expected_sequence}, found {sequence}. "
+                f"{label}sequence gap: expected {expected_sequence}, found {sequence}. "
                 "The ledger is contiguous when complete — a gap means rows are missing."
             )
             first_bad = sequence
             continue
         if prev_hash != expected_prev:
             problems.append(
-                f"sequence {sequence}: prev_hash does not link to the previous row "
+                f"{label}sequence {sequence}: prev_hash does not link to the previous row "
                 f"(expected {expected_prev}, found {prev_hash})"
             )
             first_bad = sequence
             continue
         if compute_entry_hash(expected_prev, payload) != entry_hash:
             problems.append(
-                f"sequence {sequence}: row content does not reproduce its own entry_hash "
-                "— this row was altered after it was written"
+                f"{label}sequence {sequence}: row content does not reproduce its own "
+                "entry_hash — this row was altered after it was written"
             )
             first_bad = sequence
             continue
@@ -320,9 +340,109 @@ def verify_csv(csv_path: Path) -> dict[str, Any]:
         "chain_ok": first_bad is None,
         "first_bad_sequence": first_bad,
         "chain_head": expected_prev if rows and first_bad is None else None,
+        "problems": problems,
+    }
+
+
+def _collect_epochs(rows: list[tuple[dict[str, Any], str, str]]) -> list[dict[str, Any]]:
+    """Distinct `rules_hash` values with row counts, in first-appearance order.
+
+    Counted over EVERY row, including ones before a re-baseline boundary and
+    ones after a break. An epoch census that silently stopped at the first bad
+    row would under-report a rule change that happened later in the file.
+    """
+    epochs: list[dict[str, Any]] = []
+    index: dict[str, int] = {}
+    for payload, _prev, _entry in rows:
+        rules_hash = payload["rules_hash"]
+        if rules_hash in index:
+            epochs[index[rules_hash]]["row_count"] += 1
+        else:
+            index[rules_hash] = len(epochs)
+            epochs.append({"rules_hash": rules_hash, "row_count": 1})
+    return epochs
+
+
+def verify_csv(csv_path: Path, *, rebaseline_sequence: int | None = None) -> dict[str, Any]:
+    """Replay the chain and report what verifies. Returns the outcome as a dict.
+
+    With no `rebaseline_sequence` this is a single walk from genesis and
+    `chain_ok` means what it has always meant.
+
+    With one, the file is split at that sequence and BOTH halves are replayed:
+    the prefix from genesis (reported as `legacy_*`) and the segment from the
+    boundary row's own stored `prev_hash` (reported as `chain_ok`). The prefix
+    walk is not optional and its result is never suppressed — a re-baseline is
+    a publisher declaring which rows it still stands behind, and the only thing
+    that keeps that honest is that the rows it no longer stands behind are
+    checked and reported anyway.
+
+    ⚠️ Read `chain_ok` together with `rebaseline_sequence`. On a re-baselined
+    snapshot it is a claim about the segment, not about the history.
+    """
+    rows = read_rows(csv_path)
+    epochs = _collect_epochs(rows)
+    problems: list[str] = []
+
+    legacy = _replay(rows, anchor=GENESIS_HASH, label="")
+
+    if rebaseline_sequence is None:
+        result = dict(legacy)
+        result.update(
+            {
+                "row_count": len(rows),
+                "epochs": epochs,
+                "rebaseline_sequence": None,
+                "legacy_chain_ok": legacy["chain_ok"],
+                "legacy_first_bad_sequence": legacy["first_bad_sequence"],
+                "problems": list(legacy["problems"]),
+            }
+        )
+        return result
+
+    sequences = [payload["sequence"] for payload, _p, _e in rows]
+    if rebaseline_sequence <= (sequences[0] if sequences else 1):
+        # A boundary at or before the first row is a re-genesis of the whole
+        # file: it would verify any history at all, including one written this
+        # morning. Refuse rather than print a reassuring line about it.
+        problems.append(
+            f"rebaseline_sequence {rebaseline_sequence} is at or before the first row "
+            "in this file, which would re-baseline the entire history onto itself. "
+            "That verifies nothing."
+        )
+    elif rebaseline_sequence not in sequences:
+        problems.append(
+            f"rebaseline_sequence {rebaseline_sequence} names a row that is not in this "
+            "file, so the segment it claims to verify cannot be located."
+        )
+
+    if problems:
+        return {
+            "chain_ok": False,
+            "first_bad_sequence": rebaseline_sequence,
+            "chain_head": None,
+            "row_count": len(rows),
+            "epochs": epochs,
+            "rebaseline_sequence": rebaseline_sequence,
+            "legacy_chain_ok": legacy["chain_ok"],
+            "legacy_first_bad_sequence": legacy["first_bad_sequence"],
+            "problems": problems + list(legacy["problems"]),
+        }
+
+    split = sequences.index(rebaseline_sequence)
+    segment = rows[split:]
+    segment_result = _replay(segment, anchor=segment[0][1], label="")
+
+    return {
+        "chain_ok": segment_result["chain_ok"],
+        "first_bad_sequence": segment_result["first_bad_sequence"],
+        "chain_head": segment_result["chain_head"],
         "row_count": len(rows),
         "epochs": epochs,
-        "problems": problems,
+        "rebaseline_sequence": rebaseline_sequence,
+        "legacy_chain_ok": legacy["chain_ok"],
+        "legacy_first_bad_sequence": legacy["first_bad_sequence"],
+        "problems": list(segment_result["problems"]),
     }
 
 
@@ -364,6 +484,39 @@ def check_manifest(manifest: dict[str, Any], result: dict[str, Any]) -> list[str
             "already known to be broken when this snapshot was published."
         )
 
+    rebaseline = manifest.get("rebaseline_sequence")
+    if rebaseline is not None:
+        if not str(manifest.get("rebaseline_reason") or "").strip():
+            problems.append(
+                f"the manifest declares rebaseline_sequence={rebaseline} but gives no "
+                "rebaseline_reason. A boundary with no stated reason is not "
+                "distinguishable from one placed to skip an inconvenient row."
+            )
+        for field in ("legacy_chain_ok", "legacy_first_bad_sequence"):
+            if field not in manifest:
+                problems.append(
+                    f"the manifest declares a re-baseline but omits {field!r}. A "
+                    "re-baselined snapshot must publish what it no longer claims, "
+                    "not only what it still does."
+                )
+        published_legacy = manifest.get("legacy_chain_ok")
+        if "legacy_chain_ok" in manifest and published_legacy != result["legacy_chain_ok"]:
+            problems.append(
+                f"legacy_chain_ok mismatch: this file derives {result['legacy_chain_ok']}, "
+                f"the manifest published {published_legacy}."
+            )
+        published_legacy_bad = manifest.get("legacy_first_bad_sequence")
+        if (
+            "legacy_first_bad_sequence" in manifest
+            and published_legacy_bad != result["legacy_first_bad_sequence"]
+        ):
+            problems.append(
+                "legacy_first_bad_sequence mismatch: this file derives "
+                f"{result['legacy_first_bad_sequence']}, the manifest published "
+                f"{published_legacy_bad}. The frozen prefix is not the one that was "
+                "frozen."
+            )
+
     return problems
 
 
@@ -380,9 +533,32 @@ def main(argv: list[str] | None = None) -> int:
         help="manifest.json holding the published chain head. Omit to check only "
         "that the CSV is internally consistent.",
     )
+    parser.add_argument(
+        "--rebaseline",
+        type=int,
+        default=None,
+        metavar="SEQUENCE",
+        help="Verify the segment from SEQUENCE onward, anchored on that row's own "
+        "prev_hash, instead of requiring the whole file to verify from genesis. "
+        "Normally read from the manifest; pass it here to check a claimed boundary "
+        "without one. The from-genesis walk still runs and is still reported.",
+    )
     args = parser.parse_args(argv)
 
-    result = verify_csv(args.csv)
+    # The manifest is read BEFORE verification, because it is what declares
+    # whether a re-baseline is in force — and therefore what `chain_ok` is even
+    # a claim about. `--rebaseline` exists so the CSV can still be checked
+    # against a claimed boundary when no manifest is to hand; it cannot silence
+    # one, since the from-genesis walk runs either way.
+    manifest: dict[str, Any] | None = None
+    if args.manifest is not None:
+        manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+
+    rebaseline = args.rebaseline
+    if rebaseline is None and manifest is not None:
+        rebaseline = manifest.get("rebaseline_sequence")
+
+    result = verify_csv(args.csv, rebaseline_sequence=rebaseline)
 
     print(f"rows:       {result['row_count']}")
     print(f"chain head: {result['chain_head']}")
@@ -390,6 +566,31 @@ def main(argv: list[str] | None = None) -> int:
         print(f"epoch:      {epoch['rules_hash']}  ({epoch['row_count']} rows)")
 
     problems = list(result["problems"])
+
+    if rebaseline is not None:
+        reason = str((manifest or {}).get("rebaseline_reason") or "").strip()
+        print(
+            f"\n{'=' * 70}\n"
+            f"RE-BASELINED SNAPSHOT — verification restarts at sequence {rebaseline}.\n"
+            f"{'=' * 70}\n"
+            f"'chain head' and the OK/FAIL below describe sequences {rebaseline} and\n"
+            "onward ONLY. Rows before that boundary are replayed from genesis too,\n"
+            "and reported here, but the publisher no longer claims they verify:\n"
+            f"\n  rows before {rebaseline}: "
+            + ("verify from genesis" if result["legacy_chain_ok"] else "DO NOT verify")
+            + (
+                ""
+                if result["legacy_chain_ok"]
+                else f" (first failure at sequence {result['legacy_first_bad_sequence']})"
+            )
+            + "\n\nA re-baseline weakens the guarantee over everything before the boundary:\n"
+            "a row altered there would no longer fail the headline check. What limits\n"
+            "that is publication, not cryptography — the boundary and its reason are\n"
+            "committed and timestamped daily, so moving the boundary later is itself\n"
+            "visible in the public repository's history. Check it.\n"
+            + (f"\nStated reason:\n  {reason}\n" if reason else "")
+        )
+
     if args.manifest is None:
         print(
             "\nNOTE: no manifest given. This checks only that the CSV is internally "
@@ -398,7 +599,7 @@ def main(argv: list[str] | None = None) -> int:
             "fact."
         )
     else:
-        manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+        assert manifest is not None
         problems.extend(check_manifest(manifest, result))
         print(f"manifest:   {args.manifest} (snapshot_date={manifest.get('snapshot_date')})")
 
@@ -408,8 +609,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {problem}")
         return 1
 
+    # The scope of the claim is stated in the success line itself. "verifies
+    # from genesis" on a re-baselined snapshot would be false in exactly the
+    # way this whole mechanism exists to avoid.
+    scope = (
+        "from genesis"
+        if rebaseline is None
+        else f"from the re-baseline at sequence {rebaseline} (NOT from genesis)"
+    )
     print(
-        "\nOK — chain verifies from genesis"
+        f"\nOK — chain verifies {scope}"
         + ("" if args.manifest is None else " and matches the published head")
     )
     return 0
