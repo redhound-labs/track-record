@@ -1,10 +1,10 @@
 {
   "archive_head": {
-    "as_of_date": "2026-11-17",
-    "entry_hash": "68da69154455128e889b195dc9ad000e7ebd0b0e44317850d14397c31b864b51",
-    "sequence": 868
+    "as_of_date": "2026-11-18",
+    "entry_hash": "472ae16910a34ae149142713b9b889e5d98315246ac7c0e9313687c78f873e1a",
+    "sequence": 898
   },
-  "chain_head": "313caba73729333e291a592ee1f5edfd66fd7981a01cec602fd5d373afbd68b2",
+  "chain_head": "8d77ff458f9b9031847242267455fd6e04c1a919cf3cd717d45b92dd22259683",
   "chain_ok": true,
   "columns": [
     "sequence",
@@ -31,7 +31,7 @@
   ],
   "epochs": [
     {
-      "row_count": 3122,
+      "row_count": 3124,
       "rules_hash": "a46a99b6beeaa62d9ced40b2da242c93766dc1ec0e9a3817dbaef66be1ee7c5a"
     },
     {
@@ -51,7 +51,7 @@
       "rules_hash": "004058c2847813dfb978e7daacda589ef2224898ec23767c2f54c1cba0fc2e1a"
     },
     {
-      "row_count": 4462,
+      "row_count": 4525,
       "rules_hash": "362d96f8d9170eb2d040f12db7f96c732d41c837b2163649b7b94ad6d30c1ba2"
     }
   ],
@@ -60,6 +60,6 @@
   "legacy_first_bad_sequence": 827,
   "rebaseline_reason": "Sequences 827-1003 include 65 rows whose entry_hash was computed over a Python negative zero that Postgres NUMERIC normalises away, so those rows cannot reproduce their own digest. All 65 are FSLR rows with a zero gross return, across 3 signals, with no unexplained residual; every prev_hash link still holds, so the damage is a sparse set and not a broken suffix. The table is append-only by trigger; the rows are frozen as written and are not edited. Verification of the live record restarts at this sequence, anchored on the frozen prefix's head. The write-path fix went live in 3480659 on 2026-09-07 and 1004 is the first row written after it. See docs/specs/2026-09-06-ledger-rebaseline.md.",
   "rebaseline_sequence": 1004,
-  "row_count": 8600,
-  "snapshot_date": "2026-11-17"
+  "row_count": 8665,
+  "snapshot_date": "2026-11-18"
 }
